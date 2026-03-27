@@ -1,0 +1,8 @@
+streamlit
+opencv-python-headless
+mediapipe==0.10.9
+groq
+plotly
+streamlit-webrtc
+av
+numpy
