@@ -330,86 +330,68 @@ class AudioProcessor(AudioProcessorBase):
 #           OPENCV VIDEO PROCESSOR
 # ==========================================
 
-# Around line 333 - Add null check
 def process_frame_opencv(frame):
     """Use OpenCV Haar cascades instead of MediaPipe."""
-    if frame is None:
-        return None, False, False, "neutral"
-    
-    h, w    = frame.shape[:2]
-    frame   = cv2.flip(frame, 1)
-    gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-def process_frame_opencv(frame):
-    """Use OpenCV Haar cascades instead of MediaPipe."""
-    h, w    = frame.shape[:2]
-    frame   = cv2.flip(frame, 1)
-    gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    face_detected = False
-    eye_contact   = False
-    expression    = "neutral"
-
-    faces = face_cascade.detectMultiScale(
-        gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
-    )
-
-    if len(faces) > 0:
-        face_detected = True
-        x, y, fw, fh = faces[0]
-        cv2.rectangle(frame, (x, y), (x + fw, y + fh), (0, 255, 0), 2)
-
-        # Detect eyes within the face region
-        face_gray   = gray[y:y+fh, x:x+fw]
-        face_color  = frame[y:y+fh, x:x+fw]
-        eyes        = eye_cascade.detectMultiScale(face_gray, scaleFactor=1.1, minNeighbors=5)
-
-        if len(eyes) >= 2:
-            eye_contact = True
-            for (ex, ey, ew, eh) in eyes[:2]:
-                cv2.rectangle(face_color, (ex, ey), (ex+ew, ey+eh), (255, 100, 0), 2)
-
-        # Simple expression heuristic: face height/width ratio
-        ratio = fh / fw if fw > 0 else 1
-        if ratio > 1.35:
-            expression = "confident"
-        elif ratio < 1.1:
-            expression = "nervous"
-        else:
-            expression = "neutral"
-
-    if not face_detected:
-        cv2.putText(frame, "No face detected!", (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-    else:
-        ec_color = (0, 255, 0) if eye_contact else (0, 165, 255)
-        cv2.putText(frame, "Eye Contact: GOOD" if eye_contact else "Look at Camera!",
-                    (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, ec_color, 2)
-        exp_map = {
-            "confident": ("Confident", (0, 255, 0)),
-            "neutral":   ("Neutral",   (255, 255, 0)),
-            "nervous":   ("Nervous",   (0, 0, 255))
-        }
-        cv2.putText(frame, exp_map[expression][0], (20, 75),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, exp_map[expression][1], 2)
-
-    return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), eye_contact, face_detected, expression
-
-# Around line 395-401 - Add error handling in recv
-def recv(self, frame):
     try:
-        img = frame.to_ndarray(format="bgr24")
-        result = process_frame_opencv(img)
-        if result[0] is None:
-            return frame
-        processed, ec, fd, exp = result
-        self.eye_contact   = ec
-        self.face_detected = fd
-        self.expression    = exp
-        return av.VideoFrame.from_ndarray(processed, format="rgb24")
+        if frame is None:
+            return None, False, False, "neutral"
+        
+        h, w    = frame.shape[:2]
+        frame   = cv2.flip(frame, 1)
+        gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        face_detected = False
+        eye_contact   = False
+        expression    = "neutral"
+
+        faces = face_cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+        )
+
+        if len(faces) > 0:
+            face_detected = True
+            x, y, fw, fh = faces[0]
+            cv2.rectangle(frame, (x, y), (x + fw, y + fh), (0, 255, 0), 2)
+
+            # Detect eyes within the face region
+            face_gray   = gray[y:y+fh, x:x+fw]
+            face_color  = frame[y:y+fh, x:x+fw]
+            eyes        = eye_cascade.detectMultiScale(face_gray, scaleFactor=1.1, minNeighbors=5)
+
+            if len(eyes) >= 2:
+                eye_contact = True
+                for (ex, ey, ew, eh) in eyes[:2]:
+                    cv2.rectangle(face_color, (ex, ey), (ex+ew, ey+eh), (255, 100, 0), 2)
+
+            # Simple expression heuristic: face height/width ratio
+            ratio = fh / fw if fw > 0 else 1
+            if ratio > 1.35:
+                expression = "confident"
+            elif ratio < 1.1:
+                expression = "nervous"
+            else:
+                expression = "neutral"
+
+        if not face_detected:
+            cv2.putText(frame, "No face detected!", (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        else:
+            ec_color = (0, 255, 0) if eye_contact else (0, 165, 255)
+            cv2.putText(frame, "Eye Contact: GOOD" if eye_contact else "Look at Camera!",
+                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, ec_color, 2)
+            exp_map = {
+                "confident": ("Confident", (0, 255, 0)),
+                "neutral":   ("Neutral",   (255, 255, 0)),
+                "nervous":   ("Nervous",   (0, 0, 255))
+            }
+            cv2.putText(frame, exp_map[expression][0], (20, 75),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, exp_map[expression][1], 2)
+
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), eye_contact, face_detected, expression
+    
     except Exception as e:
-        print(f"Video processor error: {e}")
-        return frame
+        st.error(f"Frame processing error: {e}")
+        return None, False, False, "neutral"
 
 
 class InterviewVideoProcessor(VideoProcessorBase):
@@ -419,12 +401,19 @@ class InterviewVideoProcessor(VideoProcessorBase):
         self.expression    = "neutral"
 
     def recv(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        processed, ec, fd, exp = process_frame_opencv(img)
-        self.eye_contact   = ec
-        self.face_detected = fd
-        self.expression    = exp
-        return av.VideoFrame.from_ndarray(processed, format="rgb24")
+        try:
+            img = frame.to_ndarray(format="bgr24")
+            result = process_frame_opencv(img)
+            if result[0] is None:
+                return frame
+            processed, ec, fd, exp = result
+            self.eye_contact   = ec
+            self.face_detected = fd
+            self.expression    = exp
+            return av.VideoFrame.from_ndarray(processed, format="rgb24")
+        except Exception as e:
+            print(f"Video processor error: {e}")
+            return frame
 
 # ==========================================
 #           HELPERS
