@@ -330,6 +330,16 @@ class AudioProcessor(AudioProcessorBase):
 #           OPENCV VIDEO PROCESSOR
 # ==========================================
 
+# Around line 333 - Add null check
+def process_frame_opencv(frame):
+    """Use OpenCV Haar cascades instead of MediaPipe."""
+    if frame is None:
+        return None, False, False, "neutral"
+    
+    h, w    = frame.shape[:2]
+    frame   = cv2.flip(frame, 1)
+    gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
 def process_frame_opencv(frame):
     """Use OpenCV Haar cascades instead of MediaPipe."""
     h, w    = frame.shape[:2]
@@ -384,6 +394,22 @@ def process_frame_opencv(frame):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, exp_map[expression][1], 2)
 
     return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), eye_contact, face_detected, expression
+
+# Around line 395-401 - Add error handling in recv
+def recv(self, frame):
+    try:
+        img = frame.to_ndarray(format="bgr24")
+        result = process_frame_opencv(img)
+        if result[0] is None:
+            return frame
+        processed, ec, fd, exp = result
+        self.eye_contact   = ec
+        self.face_detected = fd
+        self.expression    = exp
+        return av.VideoFrame.from_ndarray(processed, format="rgb24")
+    except Exception as e:
+        print(f"Video processor error: {e}")
+        return frame
 
 
 class InterviewVideoProcessor(VideoProcessorBase):
