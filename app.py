@@ -1,10 +1,7 @@
 import os
-os.environ["MEDIAPIPE_DISABLE_GPU"] = "1"
-
 import streamlit as st
 import streamlit.components.v1 as components
 import cv2
-import mediapipe as mp
 import groq
 import plotly.graph_objects as go
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, AudioProcessorBase, RTCConfiguration
@@ -14,6 +11,7 @@ import numpy as np
 import queue
 import wave
 import threading
+import base64
 
 # ==========================================
 #           PAGE CONFIG
@@ -92,7 +90,18 @@ if 'interview_started' not in st.session_state:
     st.session_state.recording            = False
     st.session_state.tts_b64              = ""
     st.session_state.speak_question       = False
-    st.session_state.show_feedback        = False  # show feedback screen after answer
+    st.session_state.show_feedback        = False
+
+# ==========================================
+#           OPENCV FACE DETECTION SETUP
+# ==========================================
+
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+)
+eye_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + 'haarcascade_eye.xml'
+)
 
 # ==========================================
 #           GROQ SETUP
@@ -220,14 +229,13 @@ def get_ideal_answer(question, job_role):
     return response.choices[0].message.content
 
 # ==========================================
-#           TTS — Groq Orpheus → browser
+#           TTS
 # ==========================================
 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # "Bella" — natural female voice
+ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
 
 def generate_tts_b64(text):
-    """Call ElevenLabs TTS — sounds completely human."""
     if not ELEVENLABS_API_KEY:
         return ""
     try:
@@ -246,11 +254,10 @@ def generate_tts_b64(text):
         with urllib.request.urlopen(req) as resp:
             audio_bytes = resp.read()
         return base64.b64encode(audio_bytes).decode("utf-8")
-    except Exception as e:
+    except Exception:
         return ""
 
 def play_audio_in_browser(b64_audio, fallback_text=""):
-    """Play ElevenLabs MP3 if available, else browser speech."""
     if b64_audio:
         components.html(f"""
         <audio autoplay style="display:none">
@@ -319,111 +326,53 @@ class AudioProcessor(AudioProcessorBase):
             self.chunks    = []
         return chunks, src_rate
 
-def frames_to_wav(chunks, src_rate=48000):
-    """Convert int16 mono PCM chunks → 16kHz WAV bytes for Whisper."""
-    if not chunks:
-        return None
-    import io
-    audio_i16 = np.concatenate(chunks)              # int16 array
-    audio_f32 = audio_i16.astype(np.float32) / 32768.0
-
-    # Resample to 16 kHz
-    if src_rate != 16000:
-        n_out   = int(len(audio_f32) * 16000 / src_rate)
-        idx     = np.linspace(0, len(audio_f32) - 1, n_out)
-        audio_f32 = np.interp(idx, np.arange(len(audio_f32)), audio_f32)
-
-    out_i16 = np.clip(audio_f32 * 32767, -32768, 32767).astype(np.int16)
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(16000)
-        wf.writeframes(out_i16.tobytes())
-    buf.seek(0)
-    return buf.read()
-
-def transcribe_wav(wav_bytes):
-    """Send 16kHz mono WAV to Groq Whisper and return transcript string."""
-    if not wav_bytes:
-        return ""
-    import io
-    client = get_client()
-    buf    = io.BytesIO(wav_bytes)
-    buf.name = "answer.wav"
-    result = client.audio.transcriptions.create(
-        model="whisper-large-v3",
-        file=buf,
-        language="en",
-        response_format="text"
-    )
-    if isinstance(result, str):
-        return result.strip()
-    return getattr(result, "text", "").strip()
-
 # ==========================================
-#           CAMERA + MEDIAPIPE
+#           OPENCV VIDEO PROCESSOR
 # ==========================================
 
-os.environ["MEDIAPIPE_DISABLE_GPU"] = "1"
-
-mp_face_mesh = mp.solutions.face_mesh
-face_mesh    = mp_face_mesh.FaceMesh(
-    max_num_faces=1,
-    refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
-
-LEFT_IRIS  = [474, 475, 476, 477]
-RIGHT_IRIS = [469, 470, 471, 472]
-
-def process_frame(frame):
+def process_frame_opencv(frame):
+    """Use OpenCV Haar cascades instead of MediaPipe."""
     h, w    = frame.shape[:2]
     frame   = cv2.flip(frame, 1)
-    rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = face_mesh.process(rgb)
+    gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    eye_contact   = False
     face_detected = False
+    eye_contact   = False
     expression    = "neutral"
 
-    if results.multi_face_landmarks:
+    faces = face_cascade.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+    )
+
+    if len(faces) > 0:
         face_detected = True
-        for face_landmarks in results.multi_face_landmarks:
-            lm = face_landmarks.landmark
+        x, y, fw, fh = faces[0]
+        cv2.rectangle(frame, (x, y), (x + fw, y + fh), (0, 255, 0), 2)
 
-            left_corner  = lm[33]
-            right_corner = lm[133]
-            r_left       = lm[362]
-            r_right      = lm[263]
+        # Detect eyes within the face region
+        face_gray   = gray[y:y+fh, x:x+fw]
+        face_color  = frame[y:y+fh, x:x+fw]
+        eyes        = eye_cascade.detectMultiScale(face_gray, scaleFactor=1.1, minNeighbors=5)
 
-            lew = abs(int(right_corner.x * w) - int(left_corner.x * w))
-            rew = abs(int(r_right.x * w)      - int(r_left.x * w))
+        if len(eyes) >= 2:
+            eye_contact = True
+            for (ex, ey, ew, eh) in eyes[:2]:
+                cv2.rectangle(face_color, (ex, ey), (ex+ew, ey+eh), (255, 100, 0), 2)
 
-            if lew > 0 and rew > 0:
-                lr = (int(lm[LEFT_IRIS[0]].x * w)  - int(left_corner.x * w)) / lew
-                rr = (int(lm[RIGHT_IRIS[0]].x * w) - int(r_left.x * w)) / rew
-                eye_contact = 0.35 <= (lr + rr) / 2 <= 0.65
-
-            smile = lm[13].y - (lm[61].y + lm[291].y) / 2
-            brow  = (abs(lm[70].y - lm[159].y) + abs(lm[300].y - lm[386].y)) / 2
-
-            if smile > 0.01:
-                expression = "confident"
-            elif brow < 0.02:
-                expression = "nervous"
-            else:
-                expression = "neutral"
-
-            for idx in LEFT_IRIS + RIGHT_IRIS:
-                cv2.circle(frame, (int(lm[idx].x * w), int(lm[idx].y * h)), 3, (255, 100, 0), -1)
+        # Simple expression heuristic: face height/width ratio
+        ratio = fh / fw if fw > 0 else 1
+        if ratio > 1.35:
+            expression = "confident"
+        elif ratio < 1.1:
+            expression = "nervous"
+        else:
+            expression = "neutral"
 
     if not face_detected:
         cv2.putText(frame, "No face detected!", (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
     else:
-        ec_color = (0, 255, 0) if eye_contact else (0, 0, 255)
+        ec_color = (0, 255, 0) if eye_contact else (0, 165, 255)
         cv2.putText(frame, "Eye Contact: GOOD" if eye_contact else "Look at Camera!",
                     (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, ec_color, 2)
         exp_map = {
@@ -436,6 +385,7 @@ def process_frame(frame):
 
     return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), eye_contact, face_detected, expression
 
+
 class InterviewVideoProcessor(VideoProcessorBase):
     def __init__(self):
         self.eye_contact   = False
@@ -444,7 +394,7 @@ class InterviewVideoProcessor(VideoProcessorBase):
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
-        processed, ec, fd, exp = process_frame(img)
+        processed, ec, fd, exp = process_frame_opencv(img)
         self.eye_contact   = ec
         self.face_detected = fd
         self.expression    = exp
@@ -500,7 +450,7 @@ def submit_answer(answer, job_role, level, max_q):
         st.session_state.current_level -= 1
 
     st.session_state.recording      = False
-    st.session_state.show_feedback  = True   # show feedback screen
+    st.session_state.show_feedback  = True
     st.rerun()
 
 # ==========================================
@@ -510,7 +460,7 @@ def submit_answer(answer, job_role, level, max_q):
 st.markdown("""
 <h1 style='text-align:center; color:#ff4b4b;'>🎙️ AI Mock Interviewer</h1>
 <p style='text-align:center; color:#888; font-size:16px;'>
-    Adaptive difficulty &bull; Real-time feedback &bull; Expression detection
+    Adaptive difficulty &bull; Real-time feedback &bull; Face detection
 </p>
 """, unsafe_allow_html=True)
 st.divider()
@@ -578,9 +528,7 @@ elif st.session_state.interview_started and not st.session_state.interview_done:
     st.progress(q_num / max_q,
                 text=f"Question {q_num}/{max_q} — {level_badge(level)}")
 
-    # ==========================================
-    # FEEDBACK SCREEN — shown after each answer
-    # ==========================================
+    # ---- FEEDBACK SCREEN ----
     if st.session_state.get("show_feedback", False):
         score = st.session_state.last_score
         color = score_color(score)
@@ -670,7 +618,6 @@ elif st.session_state.interview_started and not st.session_state.interview_done:
     with interview_col:
         st.markdown("### 🤖 Interview")
 
-        # Generate question
         if not st.session_state.current_question:
             with st.spinner("AI is thinking of a question..."):
                 q = ask_question(job_role, level,
@@ -684,12 +631,10 @@ elif st.session_state.interview_started and not st.session_state.interview_done:
                 st.session_state.tts_b64 = generate_tts_b64(q)
                 st.session_state.speak_question = True
 
-        # Autoplay once when freshly generated
         if st.session_state.get("speak_question", False):
             play_audio_in_browser(st.session_state.get("tts_b64", ""), st.session_state.current_question)
             st.session_state.speak_question = False
 
-        # Show question
         st.markdown(f"""
         <div class='question-box'>
             <b>Question {q_num + 1}:</b><br><br>
@@ -700,7 +645,6 @@ elif st.session_state.interview_started and not st.session_state.interview_done:
         if st.button("🔊 Replay Question"):
             play_audio_in_browser(st.session_state.get("tts_b64", ""), st.session_state.current_question)
 
-        # Show previous feedback
         if st.session_state.last_score is not None:
             score = st.session_state.last_score
             color = score_color(score)
@@ -711,21 +655,8 @@ elif st.session_state.interview_started and not st.session_state.interview_done:
                 <b>{emoji} Previous Score: {score}/10</b>
             </div>
             """, unsafe_allow_html=True)
-            if st.session_state.last_feedback:
-                st.markdown(f"""
-                <div class='feedback-box'>
-                    💬 <b>Feedback:</b><br>{st.session_state.last_feedback}
-                </div>
-                """, unsafe_allow_html=True)
-            if st.session_state.last_ideal:
-                with st.expander("💡 See Ideal Answer"):
-                    st.markdown(f"""
-                    <div class='ideal-box'>{st.session_state.last_ideal}</div>
-                    """, unsafe_allow_html=True)
 
         st.markdown("---")
-
-        # ---- MIC RECORDING via browser MediaRecorder ----
         st.markdown("#### 🎤 Your Answer")
 
         components.html("""
