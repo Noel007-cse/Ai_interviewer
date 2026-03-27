@@ -107,7 +107,21 @@ eye_cascade = cv2.CascadeClassifier(
 #           GROQ SETUP
 # ==========================================
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+# ==========================================
+#           GROQ SETUP
+# ==========================================
+
+import streamlit as st
+
+# Try to get API key from Streamlit secrets first, then environment
+try:
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+except:
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
+if not GROQ_API_KEY:
+    st.error("❌ GROQ_API_KEY not found. Please add it to Streamlit Secrets.")
+    st.stop()
 
 LEVELS = {
     1: "beginner - ask very basic conceptual questions only",
