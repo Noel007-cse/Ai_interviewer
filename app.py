@@ -24,6 +24,31 @@ st.set_page_config(
 )
 
 # ==========================================
+#           GROQ SETUP
+# ==========================================
+
+# Try to get API key from Streamlit secrets first, then environment
+try:
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+except:
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
+if not GROQ_API_KEY:
+    st.error("❌ GROQ_API_KEY not found. Please add it to Streamlit Secrets.")
+    st.stop()
+
+LEVELS = {
+    1: "beginner - ask very basic conceptual questions only",
+    2: "elementary - ask simple practical questions",
+    3: "intermediate - ask moderate difficulty questions",
+    4: "advanced - ask complex problem solving questions",
+    5: "expert - ask deep architectural and system design questions"
+}
+
+def get_client():
+    return groq.Groq(api_key=GROQ_API_KEY)
+
+# ==========================================
 #           CUSTOM CSS
 # ==========================================
 
