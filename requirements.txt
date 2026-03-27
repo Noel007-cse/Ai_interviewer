@@ -1,7 +1,8 @@
 streamlit==1.43.0
-opencv-python-headless
+opencv-python-headless==4.10.0.84
 groq
 plotly
-streamlit-webrtc
-av
-numpy
+streamlit-webrtc==0.47.9
+av==12.3.0
+numpy<2.0
+aiortc
